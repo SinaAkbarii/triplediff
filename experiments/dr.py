@@ -8,16 +8,10 @@ import pandas as pd
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from utils.dgp import generate_synthetic_data
-from estimators.or_estimator import or_estimator
-from estimators.ipw_estimator import ipw_estimator
+from estimators.dr_estimator import dr_estimator
 
 
-def compute_true_att(data):
-    treated = data.loc[(data['G'] == 1) & (data['D'] == 1)].copy()
-    return np.mean(treated['Y_1_1'].values) - np.mean(treated['Y_1_0'].values)
-
-
-def monte_carlo(num_trials=50, num_samples=3000, num_features=3):
+def monte_carlo(num_trials=50, num_samples=1000, num_features=4, num_splits=4, dr_seed=42):
     true_atts = []
     estimated_atts = []
 
@@ -29,13 +23,11 @@ def monte_carlo(num_trials=50, num_samples=3000, num_features=3):
             random_seed=seed
         )
 
-        true_att = compute_true_att(data)
-        est_att = ipw_estimator(data)
-
-        true_atts.append(true_att)
+        est_att = dr_estimator(data, n_splits=num_splits, seed=dr_seed)
+        # Calculate the true ATT
         estimated_atts.append(est_att)
 
-    return true_atts, estimated_atts
+    return np.array(estimated_atts)
 
 
 def plot_results(true_atts, estimated_atts):
@@ -55,14 +47,18 @@ def plot_results(true_atts, estimated_atts):
 
 
 def main():
+    # Set parameters
+    num_trials = 5
+    seed = 42
+    num_samples = 1000
+    num_features = 4
+    num_splits = 5
+    estimated_atts = monte_carlo(num_trials=num_trials, num_samples=num_samples, num_features=num_features,
+                                 num_splits=num_splits, dr_seed=seed)
 
-    num_trials = 50
-    true_atts, estimated_atts = monte_carlo(num_trials=num_trials)
+    print(f"Estimated ATTs: {estimated_atts}")
 
-    print(f"Mean True ATT: {np.mean(true_atts):.4f}")
-    print(f"Mean Estimated ATT: {np.mean(estimated_atts):.4f}")
-
-    plot_results(true_atts, estimated_atts)
+    # plot_results(true_atts, estimated_atts)
 
 
 if __name__ == "__main__":

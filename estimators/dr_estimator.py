@@ -6,7 +6,7 @@ from sklearn.base import clone
 from copy import copy
 
 
-def dr_estimator(data: pd.DataFrame, covariate_names=['X1', 'X2', 'X3'],
+def dr_estimator(data: pd.DataFrame, covariate_names=['X0', 'X1', 'X2', 'X3'],
                  outcome_names=['Y_0', 'Y_1'], or_model=None, ps_model=None, n_splits=4, seed=42):
     """
     Doubly Robust Estimator for Average Treatment Effect on the Treated (ATT) using K-Fold Cross-fitting.
@@ -30,6 +30,8 @@ def dr_estimator(data: pd.DataFrame, covariate_names=['X1', 'X2', 'X3'],
     # Set the default models if not provided.
     if or_model is None:
         or_model = Ridge(alpha=1.0, random_state=seed)
+    if ps_model is None:
+        ps_model = LogisticRegression(random_state=seed)
 
     kf = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
 
@@ -40,7 +42,7 @@ def dr_estimator(data: pd.DataFrame, covariate_names=['X1', 'X2', 'X3'],
 
     def iter_fold(current_fold, next_fold):
         # Get the training data for nuisance functions
-        train_idx = np.array(set(current_fold[0]).difference(next_fold[1]))
+        train_idx = np.array(list(set(current_fold[0]).difference(next_fold[1])))
         train_data_mupi = data.iloc[train_idx].copy()
         # Fit the models on the training data. we need to train \pi_{g,d} and \mu_{g,d,\Delta} for
         # every g,d (except g=1,d=1)
@@ -49,17 +51,21 @@ def dr_estimator(data: pd.DataFrame, covariate_names=['X1', 'X2', 'X3'],
         for g in [0, 1]:
             for d in [0, 1]:
                 filt = (train_data_mupi['G'] == g) & (train_data_mupi['D'] == d)
-                X_train = train_data_mupi.loc[filt, covariate_names]
                 # Fit the propensity score model
                 model_clone = clone(ps_model)
-                model_clone.fit(X_train, filt.astype(int))
+                model_clone.fit(train_data_mupi[covariate_names], filt.astype(int))
+                # print the coefficients
+                # print("Propensity score model coefficients for G={}, D={}: {}".format(g, d, model_clone.coef_))
                 pi_hat[(g, d)] = model_clone
                 # Fit the outcome regression model
                 if g == 1 and d == 1:
                     continue
+                X_train = train_data_mupi.loc[filt, covariate_names]
                 y_train = train_data_mupi.loc[filt, outcome_names[1]] - train_data_mupi.loc[filt, outcome_names[0]]
                 model_clone = clone(or_model)
                 model_clone.fit(X_train, y_train)
+                # print the coefficients
+                # print("Outcome regression model coefficients for G={}, D={}: {}".format(g, d, model_clone.coef_))
                 mu_hat[(g, d)] = model_clone
 
         # Calculate the estimates for the test data
@@ -79,14 +85,16 @@ def dr_estimator(data: pd.DataFrame, covariate_names=['X1', 'X2', 'X3'],
             total = 0.0
             for g in [0, 1]:
                 for d in [0, 1]:
+                    if g == 1 and d == 1:
+                        continue
                     coeff = (-1) ** (g + d + 1)
-                    total += coeff * (G * D - pi_gdr(x, g, d)) * (y - mu_delta(x, g, d))
+                    total += coeff * (G * D - pi_gdr(x, g, d) * (G == g) * (D == d)) * (y - mu_delta(x, g, d))
             return total
 
         # Estimate \hat{e} from a separate fold of the data:
         train_data_e = data.iloc[next_fold[1]].copy()
-        hat_e = np.sum((train_data_e['G'] == g) & (train_data_e['D'] == d)) / len(train_data_e)
-
+        hat_e = np.sum((train_data_e['G'] == 1) & (train_data_e['D'] == 1)) / len(train_data_e)
+        print("hat_e: {}".format(hat_e))
         # Estimate the ATT:
         test_data = data.iloc[current_fold[1]].copy()
         X_test = test_data[covariate_names]
@@ -95,8 +103,8 @@ def dr_estimator(data: pd.DataFrame, covariate_names=['X1', 'X2', 'X3'],
         D_test = test_data['D']
         att_estimate = \
             np.mean(
-                hat_e * [estimate(x, y, G, D) for x, y, G, D in zip(X_test.values, Y_test.values, G_test.values,
-                                                                    D_test.values)])
+                hat_e * np.array([estimate(x, y, G, D) for x, y, G, D in zip(X_test.values, Y_test.values, G_test.values,
+                                                                    D_test.values)]))
         estimates.append(att_estimate)
 
     # Iterate through the K-Folds
